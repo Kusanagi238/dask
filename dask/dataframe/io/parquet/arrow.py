@@ -718,8 +718,9 @@ class ArrowDatasetEngine(Engine):
             dtypes = _get_pyarrow_dtypes(arrow_schema, categories)
             if set(names) != set(df.columns) - set(partition_on):
                 raise ValueError(
-                    "Appended columns not the same.\n"
-                    "Previous: {} | New: {}".format(names, list(df.columns))
+                    "Appended columns not the same.\n" "Previous: {} | New: {}".format(
+                        names, list(df.columns)
+                    )
                 )
             elif pd.Series(dtypes).loc[names].tolist() != df[names].dtypes.tolist():
                 # TODO Coerce values for compatible but different dtypes
@@ -1163,8 +1164,7 @@ class ArrowDatasetEngine(Engine):
             and index_names
             and (
                 # Only set to `[None]` if pandas metadata includes an index
-                index_names != [None]
-                or pandas_metadata.get("index_columns", None)
+                index_names != [None] or pandas_metadata.get("index_columns", None)
             )
         ):
             index = index_names
@@ -1687,10 +1687,12 @@ class ArrowDatasetEngine(Engine):
 
         if frag:
             cols = []
-            for name in columns:
+            # Iterate over a copy to avoid mutating the input `columns`
+            for name in list(columns):
                 if name is None:
                     if "__index_level_0__" in schema.names:
-                        columns.append("__index_level_0__")
+                        # preserve original intent but append to cols
+                        cols.append("__index_level_0__")
                 else:
                     cols.append(name)
 
@@ -1723,12 +1725,22 @@ class ArrowDatasetEngine(Engine):
                     if not len(partition.keys):
                         arr = pa.array(np.full(len(arrow_table), cat))
                     else:
-                        cat_ind = np.full(
-                            len(arrow_table), partition.keys.get_loc(cat), dtype="i4"
-                        )
-                        arr = pa.DictionaryArray.from_arrays(
-                            cat_ind, pa.array(partition.keys)
-                        )
+                        # Build dictionary values once
+                        dict_values = pa.array(partition.keys)
+                        # If the table is empty, construct an empty
+                        # dictionary-typed array instead of using
+                        # DictionaryArray.from_arrays which can error
+                        # with zero-length indices in some pyarrow versions.
+                        if len(arrow_table) == 0:
+                            dict_type = pa.dictionary(pa.int32(), dict_values.type)
+                            arr = pa.array([], type=dict_type)
+                        else:
+                            cat_ind = np.full(
+                                len(arrow_table),
+                                partition.keys.get_loc(cat),
+                                dtype="i4",
+                            )
+                            arr = pa.DictionaryArray.from_arrays(cat_ind, dict_values)
                     arrow_table = arrow_table.append_column(partition.name, arr)
 
         return arrow_table

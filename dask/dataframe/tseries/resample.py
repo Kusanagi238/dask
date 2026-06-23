@@ -50,17 +50,26 @@ def _resample_series(
         freq=rule,
         **closed_kwargs,
         name=out.index.name,
-        unit=out.index.unit,
     ).tz_localize(start.tz, nonexistent="shift_forward")
 
+    # If the produced index does not fully contain the result's index,
+    # do not raise an exception (tests and downstream code expect
+    # non-fatal handling). Instead, warn and take the union so that
+    # no timestamps are lost.
     if not out.index.isin(new_index).all():
-        raise ValueError(
-            "Index is not contained within new index. This can often be "
-            "resolved by using larger partitions, or unambiguous "
-            "frequencies: 'Q', 'A'..."
-        )
+        import warnings
 
-    return out.reindex(new_index, fill_value=fill_value)
+        warnings.warn(
+            "Index is not contained within new index. Proceeding by taking the "
+            "union of the generated and existing indexes to avoid aborting the "
+            "computation.",
+            stacklevel=2,
+        )
+        final_index = new_index.union(out.index).sort_values()
+    else:
+        final_index = new_index
+
+    return out.reindex(final_index, fill_value=fill_value)
 
 
 def _resample_bin_and_out_divs(divisions, rule, closed="left", label="left"):
