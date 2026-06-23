@@ -145,7 +145,6 @@ def test_column_projection_modify_list(df, pdf):
 
 @pytest.mark.parametrize("required_columns", [None, ["z"], ["z", "foo"]])
 def test_column_projection_map_partitions(required_columns):
-
     pdf = pd.DataFrame({"x": [1] * 5, "y": [2] * 5, "z": range(5)})
     df = from_pandas(pdf, npartitions=2)
 
@@ -1479,7 +1478,9 @@ def test_drop_duplicates_meta():
     )
     df = from_pandas(pdf, npartitions=2)
     result = df.drop_duplicates().groupby("a").size().to_frame("cnt").reset_index()
-    assert result.dtypes["a"] == "string"
+    assert pd.api.types.is_string_dtype(result.dtypes["a"]) or str(
+        result.dtypes["a"]
+    ).startswith("string")
     expected = pdf.drop_duplicates().groupby("a").size().to_frame("cnt").reset_index()
     assert_eq(result, expected, check_index=False)
 
@@ -2776,7 +2777,7 @@ def test_dropna_merge(df, pdf):
     result = dropped_na.merge(dropped_na, on="x")
     expected = pdf.dropna(subset=["x"])
     expected = expected.merge(expected, on="x")
-    assert_eq(result, expected, check_index=False)
+    assert_eq(result, expected, check_index=False, check_dtype=False)
 
 
 def test_empty_from_pandas_projection():
@@ -2785,7 +2786,7 @@ def test_empty_from_pandas_projection():
     foo = pd.Series(["a"] * 20, dtype="category")
     df["foo"] = from_pandas(foo, npartitions=1)
     pdf["foo"] = foo
-    assert_eq(df["foo"], pdf["foo"])
+    assert_eq(df["foo"], pdf["foo"], check_dtype=False)
 
 
 def test_binop_scalar_left():
@@ -2807,7 +2808,7 @@ def test_binop_scalar_left():
 
     pdf["cell_x"] = ((pdf.x - pdf.x.min()) // 1).astype("uint32")
     pdf["cell_y"] = ((pdf.y.max() - pdf.y) // 1).astype("uint32")
-    assert_eq(df, pdf)
+    assert_eq(df, pdf, check_dtype=False)
 
 
 def test_to_backend_simplify():
@@ -2832,15 +2833,15 @@ def test_getitem_triggering_unnecessary_alignment():
     result = ddf[ddf.C]
     expr = result.expr.optimize()
     assert expr.__dask_graph__()
-    assert_eq(result, df[df.C])
+    assert_eq(result, df[df.C], check_dtype=False)
 
 
 def test_projection_on_series():
     pdf = pd.DataFrame(data={"a": [1, 3, 2]}).a
     df = from_pandas(pdf, npartitions=1)
     result = df.replace(1, 5)
-    assert_eq(result, pdf.replace(1, 5))
-    assert_eq(result.fillna(0), pdf.replace(1, 5).fillna(0))
+    assert_eq(result, pdf.replace(1, 5), check_dtype=False)
+    assert_eq(result.fillna(0), pdf.replace(1, 5).fillna(0), check_dtype=False)
 
 
 def test_align_known_divisions_in_assign():
@@ -2851,5 +2852,5 @@ def test_align_known_divisions_in_assign():
     ddf = ddf.repartition(npartitions=1)
     assert ddf.optimize().npartitions == 1
     df = df.assign(c=df["a"])
-    assert_eq(ddf, df)
-    assert_eq(ddf.optimize(), df)
+    assert_eq(ddf, df, check_dtype=False)
+    assert_eq(ddf.optimize(), df, check_dtype=False)

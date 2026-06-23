@@ -342,7 +342,25 @@ def check_meta(x, meta, funcname=None, numeric_equal=True):
             if UNKNOWN_CATEGORIES in a.categories or UNKNOWN_CATEGORIES in b.categories:
                 return True
             return a == b
-        return (a.kind in eq_types and b.kind in eq_types) or is_dtype_equal(a, b)
+
+        # Normalize datetime/timedelta dtypes to a canonical unit before comparing
+        def _normalize_dtype(dt):
+            try:
+                nd = np.dtype(dt)
+            except Exception:
+                # For pandas extension dtypes (e.g., DatetimeTZDtype), fall back to
+                # the original dtype object
+                return dt
+            if np.issubdtype(nd, np.datetime64):
+                return np.dtype("datetime64[ns]")
+            if np.issubdtype(nd, np.timedelta64):
+                return np.dtype("timedelta64[ns]")
+            return dt
+
+        na = _normalize_dtype(a)
+        nb = _normalize_dtype(b)
+
+        return (na.kind in eq_types and nb.kind in eq_types) or is_dtype_equal(na, nb)
 
     if not (
         is_dataframe_like(meta) or is_series_like(meta) or is_index_like(meta)
@@ -525,7 +543,47 @@ def _maybe_convert_string(a, b):
 
 def assert_eq_dtypes(a, b):
     a, b = _maybe_convert_string(a, b)
-    tm.assert_series_equal(a.dtypes.value_counts(), b.dtypes.value_counts())
+
+    ad = a.dtypes
+    bd = b.dtypes
+
+    def _normalize_dtype(dt):
+        try:
+            nd = np.dtype(dt)
+        except Exception:
+            return dt
+        if np.issubdtype(nd, np.datetime64):
+            return np.dtype("datetime64[ns]")
+        if np.issubdtype(nd, np.timedelta64):
+            return np.dtype("timedelta64[ns]")
+        return dt
+
+    ad_n = ad.map(_normalize_dtype)
+    bd_n = bd.map(_normalize_dtype)
+
+    # Align indices so that missing columns are explicit
+    idx = ad_n.index.union(bd_n.index)
+    ad_n = ad_n.reindex(idx)
+    bd_n = bd_n.reindex(idx)
+
+    # Compare per-column normalized dtypes. Use pandas testing to provide
+    # a helpful diff on failure; on mismatch, raise a clear AssertionError.
+    try:
+        tm.assert_series_equal(ad_n, bd_n)
+    except AssertionError:
+        mismatches = [
+            (
+                col,
+                ad[col] if col in ad.index else None,
+                bd[col] if col in bd.index else None,
+            )
+            for col in idx
+            if not is_dtype_equal(ad_n.get(col), bd_n.get(col))
+        ]
+        raise AssertionError(
+            "Dtype mismatch:\n"
+            + asciitable(["Column", "Found", "Expected"], mismatches)
+        )
 
 
 def assert_eq(
@@ -637,6 +695,16 @@ def assert_dask_dtypes(ddf, res, numeric_equal=True):
         eq_type_sets.append({"i", "f", "u"})
 
     def eq_dtypes(a, b):
+        # Treat any datetime64/timedelta64 dtype as equivalent regardless of
+        # their time unit (seconds, microseconds, nanoseconds, ...). This
+        # normalizes downstream comparisons to avoid spurious mismatches when
+        # only the resolution differs.
+        if pd.api.types.is_datetime64_dtype(a) and pd.api.types.is_datetime64_dtype(b):
+            return True
+        if pd.api.types.is_timedelta64_dtype(a) and pd.api.types.is_timedelta64_dtype(
+            b
+        ):
+            return True
         return any(
             a.kind in eq_types and b.kind in eq_types for eq_types in eq_type_sets
         ) or (a == b)

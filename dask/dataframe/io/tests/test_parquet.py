@@ -2607,7 +2607,7 @@ def test_pandas_timestamp_overflow_pyarrow(tmpdir):
                 if pa.types.is_timestamp(col.type) and (
                     col.type.unit in ("s", "ms", "us")
                 ):
-                    multiplier = {"s": 1_0000_000_000, "ms": 1_000_000, "us": 1_000}[
+                    multiplier = {"s": 1_000_000_000, "ms": 1_000_000, "us": 1_000}[
                         col.type.unit
                     ]
 
@@ -3010,15 +3010,15 @@ def test_parquet_pyarrow_write_empty_metadata(tmpdir):
     # https://github.com/dask/dask/issues/6600
     tmpdir = str(tmpdir)
 
-    df_a = dask.delayed(pd.DataFrame.from_dict)(
-        {"x": [], "y": []}, dtype=("int", "int")
-    )
-    df_b = dask.delayed(pd.DataFrame.from_dict)(
-        {"x": [1, 1, 2, 2], "y": [1, 0, 1, 0]}, dtype=("int64", "int64")
-    )
-    df_c = dask.delayed(pd.DataFrame.from_dict)(
-        {"x": [1, 2, 1, 2], "y": [1, 0, 1, 0]}, dtype=("int64", "int64")
-    )
+    df_a = dask.delayed(
+        lambda d: pd.DataFrame.from_dict(d).astype({"x": "int64", "y": "int64"})
+    )({"x": [], "y": []})
+    df_b = dask.delayed(
+        lambda d: pd.DataFrame.from_dict(d).astype({"x": "int64", "y": "int64"})
+    )({"x": [1, 1, 2, 2], "y": [1, 0, 1, 0]})
+    df_c = dask.delayed(
+        lambda d: pd.DataFrame.from_dict(d).astype({"x": "int64", "y": "int64"})
+    )({"x": [1, 2, 1, 2], "y": [1, 0, 1, 0]})
 
     df = dd.from_delayed([df_a, df_b, df_c])
     df.to_parquet(
@@ -3047,12 +3047,12 @@ def test_parquet_pyarrow_write_empty_metadata_append(tmpdir):
     # https://github.com/dask/dask/issues/6600
     tmpdir = str(tmpdir)
 
-    df_a = dask.delayed(pd.DataFrame.from_dict)(
-        {"x": [1, 1, 2, 2], "y": [1, 0, 1, 0]}, dtype=("int64", "int64")
-    )
-    df_b = dask.delayed(pd.DataFrame.from_dict)(
-        {"x": [1, 2, 1, 2], "y": [2, 0, 2, 0]}, dtype=("int64", "int64")
-    )
+    df_a = dask.delayed(
+        lambda d: pd.DataFrame.from_dict(d).astype({"x": "int64", "y": "int64"})
+    )({"x": [1, 1, 2, 2], "y": [1, 0, 1, 0]})
+    df_b = dask.delayed(
+        lambda d: pd.DataFrame.from_dict(d).astype({"x": "int64", "y": "int64"})
+    )({"x": [1, 2, 1, 2], "y": [2, 0, 2, 0]})
 
     df1 = dd.from_delayed([df_a, df_b])
     df1.to_parquet(
@@ -3062,12 +3062,12 @@ def test_parquet_pyarrow_write_empty_metadata_append(tmpdir):
         write_metadata_file=True,
     )
 
-    df_c = dask.delayed(pd.DataFrame.from_dict)(
-        {"x": [], "y": []}, dtype=("int64", "int64")
-    )
-    df_d = dask.delayed(pd.DataFrame.from_dict)(
-        {"x": [3, 3, 4, 4], "y": [1, 0, 1, 0]}, dtype=("int64", "int64")
-    )
+    df_c = dask.delayed(
+        lambda d: pd.DataFrame.from_dict(d).astype({"x": "int64", "y": "int64"})
+    )({"x": [], "y": []})
+    df_d = dask.delayed(
+        lambda d: pd.DataFrame.from_dict(d).astype({"x": "int64", "y": "int64"})
+    )({"x": [3, 3, 4, 4], "y": [1, 0, 1, 0]})
 
     df2 = dd.from_delayed([df_c, df_d])
     df2.to_parquet(
@@ -3311,7 +3311,7 @@ def test_roundtrip_decimal_dtype(tmpdir):
 
     data = [
         {
-            "ts": pd.to_datetime("2021-01-01", utc="Europe/Berlin"),
+            "ts": pd.to_datetime("2021-01-01").tz_localize("Europe/Berlin"),
             "col1": Decimal("123.00"),
         }
         for i in range(23)
@@ -3340,7 +3340,7 @@ def test_roundtrip_date_dtype(tmpdir):
 
     data = [
         {
-            "ts": pd.to_datetime("2021-01-01", utc="Europe/Berlin"),
+            "ts": pd.to_datetime("2021-01-01").tz_localize("Europe/Berlin"),
             "col1": date(2020, 10, 10),
         }
         for _ in range(23)
@@ -3620,9 +3620,10 @@ def test_custom_filename_works_with_pyarrow_when_append_is_true(tmpdir):
         {"num1": [33], "num2": [44]},
     )
     df = dd.from_pandas(pdf, npartitions=1)
+    # Use an offset in the name function for appended files so filenames do not collide
     df.to_parquet(
         fn,
-        name_function=lambda x: f"hi-{x * 2}.parquet",
+        name_function=lambda x: f"hi-{x * 2 + 4}.parquet",
         append=True,
         ignore_divisions=True,
     )

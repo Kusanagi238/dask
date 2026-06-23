@@ -76,16 +76,28 @@ def _append_row_groups(metadata, md):
     """
     try:
         metadata.append_row_groups(md)
-    except RuntimeError as err:
-        if "requires equal schemas" in str(err):
+    except (RuntimeError, ValueError) as err:
+        # Provide clearer diagnostics for known incompatibility messages
+        msg = str(err)
+        if "requires equal schemas" in msg:
             raise RuntimeError(
                 "Schemas are inconsistent, try using "
                 '`to_parquet(..., schema="infer")`, or pass an explicit '
                 "pyarrow schema. Such as "
                 '`to_parquet(..., schema={"column1": pa.string()})`'
             ) from err
-        else:
-            raise err
+        if "Appended dtypes differ" in msg or isinstance(err, ValueError):
+            # ValueError from pyarrow when appended dtypes differ: raise a
+            # clearer error with context and preserve exception chaining.
+            raise ValueError(
+                "Appended dtypes differ. Please ensure the dtypes of the "
+                "data being appended match the existing dataset. You can "
+                "try coercing dtypes before appending, or write with an "
+                "explicit schema via `to_parquet(..., schema=...)`.\n"
+                f"Underlying error: {msg}"
+            ) from err
+        # Unknown error: re-raise
+        raise err
 
 
 def _write_partitioned(
@@ -229,6 +241,9 @@ def _read_table_from_path(
 
     # Define file-opening options
     read_kwargs = kwargs.get("read", {}).copy()
+    # Ensure we only wrap row_groups when it is not already a list.
+    # Preserve the special-case for [None] since that indicates "all".
+    row_groups_opt = row_groups if isinstance(row_groups, list) else [row_groups]
     precache_options, open_file_options = _process_open_file_options(
         read_kwargs.pop("open_file_options", {}),
         **(
@@ -239,7 +254,7 @@ def _read_table_from_path(
             if _is_local_fs(fs)
             else {
                 "columns": columns,
-                "row_groups": row_groups if row_groups == [None] else [row_groups],
+                "row_groups": row_groups_opt,
                 "default_engine": "pyarrow",
                 "default_cache": "none",
             }
@@ -561,11 +576,12 @@ class ArrowDatasetEngine(Engine):
                 # `piece` contains (path, row_group, partition_keys)
                 (path_or_frag, row_group, partition_keys) = piece
 
-            # Convert row_group to a list and be sure to
-            # check if msgpack converted it to a tuple
-            if isinstance(row_group, tuple):
+            # Normalize row_group without converting None into [None]
+            if row_group is None:
+                pass
+            elif isinstance(row_group, tuple):
                 row_group = list(row_group)
-            if not isinstance(row_group, list):
+            elif not isinstance(row_group, list):
                 row_group = [row_group]
 
             # Read in arrow table and convert to pandas
@@ -718,16 +734,32 @@ class ArrowDatasetEngine(Engine):
             dtypes = _get_pyarrow_dtypes(arrow_schema, categories)
             if set(names) != set(df.columns) - set(partition_on):
                 raise ValueError(
-                    "Appended columns not the same.\n"
-                    "Previous: {} | New: {}".format(names, list(df.columns))
-                )
-            elif pd.Series(dtypes).loc[names].tolist() != df[names].dtypes.tolist():
-                # TODO Coerce values for compatible but different dtypes
-                raise ValueError(
-                    "Appended dtypes differ.\n{}".format(
-                        set(dtypes.items()) ^ set(df.dtypes.items())
+                    "Appended columns not the same.\n" "Previous: {} | New: {}".format(
+                        names, list(df.columns)
                     )
                 )
+            else:
+                # Compare and attempt to coerce per-column dtypes before failing
+                mismatches = []
+                for name in names:
+                    desired = dtypes.get(name)
+                    actual = df[name].dtype
+                    try:
+                        equal = pd.api.types.is_dtype_equal(desired, actual)
+                    except Exception:
+                        equal = False
+                    if not equal:
+                        try:
+                            # Try to coerce the column to the desired dtype
+                            df[name] = df[name].astype(desired)
+                        except Exception:
+                            mismatches.append((name, str(desired), str(actual)))
+                if mismatches:
+                    raise ValueError(
+                        "Appended dtypes differ and could not be coerced: {}".format(
+                            mismatches
+                        )
+                    )
 
             # Check divisions if necessary
             if division_info["name"] not in names:
@@ -1163,8 +1195,7 @@ class ArrowDatasetEngine(Engine):
             and index_names
             and (
                 # Only set to `[None]` if pandas metadata includes an index
-                index_names != [None]
-                or pandas_metadata.get("index_columns", None)
+                index_names != [None] or pandas_metadata.get("index_columns", None)
             )
         ):
             index = index_names
@@ -1690,7 +1721,7 @@ class ArrowDatasetEngine(Engine):
             for name in columns:
                 if name is None:
                     if "__index_level_0__" in schema.names:
-                        columns.append("__index_level_0__")
+                        cols.append("__index_level_0__")
                 else:
                     cols.append(name)
 
@@ -1831,7 +1862,14 @@ class ArrowDatasetEngine(Engine):
         meta = None
         for _meta in meta_list:
             if meta:
-                _append_row_groups(meta, _meta)
+                try:
+                    _append_row_groups(meta, _meta)
+                except Exception as err:
+                    # Surface a clearer error when metadata from files
+                    # cannot be aggregated (likely incompatible schemas/dtypes).
+                    raise ValueError(
+                        "Failed to aggregate metadata from files: {}".format(err)
+                    ) from err
             else:
                 meta = _meta
         if out_path:
