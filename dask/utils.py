@@ -148,7 +148,7 @@ def _deprecated_kwarg(
     new_arg_name: str | None = None,
     mapping: Mapping[Any, Any] | Callable[[Any], Any] | None = None,
     stacklevel: int = 2,
-    comment: str | None = None
+    comment: str | None = None,
 ) -> Callable[[F], F]:
     """
     Decorator to deprecate a keyword argument of a function.
@@ -219,7 +219,8 @@ def _deprecated_kwarg(
             "mapping from old to new argument values must be dict or callable!"
         )
 
-    comment = f"\n{comment}" or ""
+    # Ensure `comment` is always a string to avoid string + None concatenation
+    comment = f"\n{comment or ''}"
 
     def _deprecated_kwarg(func: F) -> F:
         @wraps(func)
@@ -1832,15 +1833,13 @@ timedelta_sizes.update({k.upper(): v for k, v in timedelta_sizes.items()})
 
 
 @overload
-def parse_timedelta(s: None, default: str | Literal[False] = "seconds") -> None:
-    ...
+def parse_timedelta(s: None, default: str | Literal[False] = "seconds") -> None: ...
 
 
 @overload
 def parse_timedelta(
     s: str | float | timedelta, default: str | Literal[False] = "seconds"
-) -> float:
-    ...
+) -> float: ...
 
 
 def parse_timedelta(s, default="seconds"):
@@ -2220,7 +2219,8 @@ def maybe_pluralize(count, noun, plural_form=None):
     if count == 1:
         return f"{count} {noun}"
     else:
-        return f"{count} {plural_form or noun + 's'}"
+        plural = plural_form if plural_form is not None else noun + "s"
+        return f"{count} {plural}"
 
 
 def is_namedtuple_instance(obj: Any) -> bool:
@@ -2289,7 +2289,7 @@ class shorten_traceback:
 
     @staticmethod
     def shorten(exc_tb: types.TracebackType) -> types.TracebackType:
-        paths = config.get("admin.traceback.shorten")
+        paths = config.get("admin.traceback.shorten") or []
         if not paths:
             return exc_tb
 
