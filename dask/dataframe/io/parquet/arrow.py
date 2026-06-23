@@ -562,10 +562,15 @@ class ArrowDatasetEngine(Engine):
                 (path_or_frag, row_group, partition_keys) = piece
 
             # Convert row_group to a list and be sure to
-            # check if msgpack converted it to a tuple
-            if isinstance(row_group, tuple):
+            # check if msgpack converted it to a tuple.
+            # Do not wrap None into a list; preserve None to indicate
+            # no explicit row-group selection.
+            if row_group is None:
+                # leave as None to indicate no explicit row-group selection
+                row_group = None
+            elif isinstance(row_group, tuple):
                 row_group = list(row_group)
-            if not isinstance(row_group, list):
+            elif not isinstance(row_group, list):
                 row_group = [row_group]
 
             # Read in arrow table and convert to pandas
@@ -718,8 +723,9 @@ class ArrowDatasetEngine(Engine):
             dtypes = _get_pyarrow_dtypes(arrow_schema, categories)
             if set(names) != set(df.columns) - set(partition_on):
                 raise ValueError(
-                    "Appended columns not the same.\n"
-                    "Previous: {} | New: {}".format(names, list(df.columns))
+                    "Appended columns not the same.\n" "Previous: {} | New: {}".format(
+                        names, list(df.columns)
+                    )
                 )
             elif pd.Series(dtypes).loc[names].tolist() != df[names].dtypes.tolist():
                 # TODO Coerce values for compatible but different dtypes
@@ -1163,8 +1169,7 @@ class ArrowDatasetEngine(Engine):
             and index_names
             and (
                 # Only set to `[None]` if pandas metadata includes an index
-                index_names != [None]
-                or pandas_metadata.get("index_columns", None)
+                index_names != [None] or pandas_metadata.get("index_columns", None)
             )
         ):
             index = index_names
@@ -1687,10 +1692,10 @@ class ArrowDatasetEngine(Engine):
 
         if frag:
             cols = []
-            for name in columns:
+            for name in list(columns):
                 if name is None:
                     if "__index_level_0__" in schema.names:
-                        columns.append("__index_level_0__")
+                        cols.append("__index_level_0__")
                 else:
                     cols.append(name)
 

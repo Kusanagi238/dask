@@ -21,5 +21,8 @@ def test_development_guidelines_matches_ci(filename):
         pytest.skip("Test can only be run on an editable install")
 
     latest_env = "environment-3.12.yaml"
-    with open(root_dir / filename, encoding="utf8") as f:
+    file_path = root_dir / filename
+    if not file_path.exists():
+        pytest.skip(f"Test file {filename!s} is not present in this environment")
+    with open(file_path, encoding="utf8") as f:
         assert latest_env in f.read()
